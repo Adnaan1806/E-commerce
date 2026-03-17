@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+
+  # ── Infrastructure ────────────────────────────────────────────
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks: [ecommerce-network]
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on: [zookeeper]
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    networks: [ecommerce-network]
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  kafka-init:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command: |
+      "
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic order-events --partitions 3 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic inventory-events --partitions 3 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic payment-events --partitions 3 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic notification-events --partitions 1 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic order-events.dlq --partitions 1 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic inventory-events.dlq --partitions 1 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic payment-events.dlq --partitions 1 --replication-factor 1
+      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic notification-events.dlq --partitions 1 --replication-factor 1
+      echo 'All Kafka topics created.'
+      "
+    networks: [ecommerce-network]
+
+  mongodb:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    networks: [ecommerce-network]
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"   # Jaeger UI
+      - "4317:4317"     # OTLP gRPC
+      - "4318:4318"     # OTLP HTTP
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    networks: [ecommerce-network]
+
+  # ── Microservices ─────────────────────────────────────────────
+
+  order-service:
+    build: ./order-service
+    ports:
+      - "8001:8000"
+    environment:
+      SERVICE_NAME: order-service
+      PORT: 8000
+      MONGO_URI: mongodb://mongodb:27017/orders_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JAEGER_HOST: jaeger
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks: [ecommerce-network]
+    restart: on-failure
+
+  inventory-service:
+    build: ./inventory-service
+    ports:
+      - "8002:8000"
+    environment:
+      SERVICE_NAME: inventory-service
+      PORT: 8000
+      MONGO_URI: mongodb://mongodb:27017/inventory_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JAEGER_HOST: jaeger
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks: [ecommerce-network]
+    restart: on-failure
+
+  payment-service:
+    build: ./payment-service
+    ports:
+      - "8003:8000"
+    environment:
+      SERVICE_NAME: payment-service
+      PORT: 8000
+      MONGO_URI: mongodb://mongodb:27017/payments_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JAEGER_HOST: jaeger
+      PAYMENT_FAILURE_RATE: "0.1"
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks: [ecommerce-network]
+    restart: on-failure
+
+  notification-service:
+    build: ./notification-service
+    ports:
+      - "8004:8000"
+    environment:
+      SERVICE_NAME: notification-service
+      PORT: 8000
+      MONGO_URI: mongodb://mongodb:27017/notifications_db
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      JAEGER_HOST: jaeger
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+    networks: [ecommerce-network]
+    restart: on-failure
+
+networks:
+  ecommerce-network:
+    driver: bridge
+
+volumes:
+  mongo-data:
