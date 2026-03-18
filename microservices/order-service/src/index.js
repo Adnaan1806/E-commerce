@@ -41,7 +41,7 @@ app.post('/orders', async (req, res) => {
       status: 'PENDING',
     })
 
-    await publishEvent('order-events', 'OrderCreated', {
+    await publishEvent('ecommerce-events', 'OrderCreated', {
       orderId,
       customerId,
       items,
@@ -95,7 +95,7 @@ app.post('/orders/:id/cancel', async (req, res) => {
     order.status = 'CANCELLED'
     await order.save()
 
-    await publishEvent('order-events', 'OrderCancelled', {
+    await publishEvent('ecommerce-events', 'OrderCancelled', {
       orderId:    order.orderId,
       customerId: order.customerId,
       reason:     'CustomerCancelled',

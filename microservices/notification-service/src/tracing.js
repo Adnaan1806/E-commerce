@@ -1,3 +1,4 @@
+require('dotenv').config()
 const { NodeSDK } = require('@opentelemetry/sdk-node')
 const { getNodeAutoInstrumentations } = require('@opentelemetry/auto-instrumentations-node')
 const { OTLPTraceExporter } = require('@opentelemetry/exporter-trace-otlp-http')
@@ -6,10 +7,13 @@ const { SemanticResourceAttributes } = require('@opentelemetry/semantic-conventi
 
 const sdk = new NodeSDK({
   resource: new Resource({
-    [SemanticResourceAttributes.SERVICE_NAME]: process.env.SERVICE_NAME || 'notification-service',
+    [SemanticResourceAttributes.SERVICE_NAME]: process.env.SERVICE_NAME || 'order-service',
   }),
   traceExporter: new OTLPTraceExporter({
-    url: `http://${process.env.JAEGER_HOST || 'localhost'}:4318/v1/traces`,
+    url: 'https://api.honeycomb.io/v1/traces',
+    headers: {
+      'x-honeycomb-team': process.env.HONEYCOMB_API_KEY,
+    },
   }),
   instrumentations: [getNodeAutoInstrumentations()],
 })
