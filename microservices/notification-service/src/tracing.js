@@ -15,7 +15,9 @@ const sdk = new NodeSDK({
       'x-honeycomb-team': process.env.HONEYCOMB_API_KEY,
     },
   }),
-  instrumentations: [getNodeAutoInstrumentations()],
+  instrumentations: [getNodeAutoInstrumentations({
+    '@opentelemetry/instrumentation-fs': { enabled: false },
+  })],
 })
 
 sdk.start()
