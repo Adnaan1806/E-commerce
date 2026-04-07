@@ -2,51 +2,22 @@ version: '3.8'
 
 services:
 
-  # ── Infrastructure ────────────────────────────────────────────
+  # ── Infrastructure ─────────────────────────────────────────────
 
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.4.0
-    environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-    networks: [ecommerce-network]
-
-  kafka:
-    image: confluentinc/cp-kafka:7.4.0
-    depends_on: [zookeeper]
+  rabbitmq:
+    image: rabbitmq:3.13-management
     ports:
-      - "9092:9092"
+      - "5672:5672"     # AMQP
+      - "15672:15672"   # Management UI (guest/guest)
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
     networks: [ecommerce-network]
     healthcheck:
-      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
       interval: 10s
       timeout: 5s
       retries: 10
-
-  kafka-init:
-    image: confluentinc/cp-kafka:7.4.0
-    depends_on:
-      kafka:
-        condition: service_healthy
-    entrypoint: ["/bin/sh", "-c"]
-    command: |
-      "
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic order-events --partitions 3 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic inventory-events --partitions 3 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic payment-events --partitions 3 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic notification-events --partitions 1 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic order-events.dlq --partitions 1 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic inventory-events.dlq --partitions 1 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic payment-events.dlq --partitions 1 --replication-factor 1
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:9092 --topic notification-events.dlq --partitions 1 --replication-factor 1
-      echo 'All Kafka topics created.'
-      "
-    networks: [ecommerce-network]
 
   mongodb:
     image: mongo:7.0
@@ -61,17 +32,7 @@ services:
       timeout: 5s
       retries: 5
 
-  jaeger:
-    image: jaegertracing/all-in-one:latest
-    ports:
-      - "16686:16686"   # Jaeger UI
-      - "4317:4317"     # OTLP gRPC
-      - "4318:4318"     # OTLP HTTP
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
-    networks: [ecommerce-network]
-
-  # ── Microservices ─────────────────────────────────────────────
+  # ── Microservices ──────────────────────────────────────────────
 
   order-service:
     build: ./order-service
@@ -81,10 +42,10 @@ services:
       SERVICE_NAME: order-service
       PORT: 8000
       MONGO_URI: mongodb://mongodb:27017/orders_db
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      JAEGER_HOST: jaeger
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY}
     depends_on:
-      kafka:
+      rabbitmq:
         condition: service_healthy
       mongodb:
         condition: service_healthy
@@ -99,10 +60,10 @@ services:
       SERVICE_NAME: inventory-service
       PORT: 8000
       MONGO_URI: mongodb://mongodb:27017/inventory_db
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      JAEGER_HOST: jaeger
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY}
     depends_on:
-      kafka:
+      rabbitmq:
         condition: service_healthy
       mongodb:
         condition: service_healthy
@@ -117,11 +78,11 @@ services:
       SERVICE_NAME: payment-service
       PORT: 8000
       MONGO_URI: mongodb://mongodb:27017/payments_db
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      JAEGER_HOST: jaeger
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY}
       PAYMENT_FAILURE_RATE: "0.1"
     depends_on:
-      kafka:
+      rabbitmq:
         condition: service_healthy
       mongodb:
         condition: service_healthy
@@ -136,10 +97,10 @@ services:
       SERVICE_NAME: notification-service
       PORT: 8000
       MONGO_URI: mongodb://mongodb:27017/notifications_db
-      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
-      JAEGER_HOST: jaeger
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      HONEYCOMB_API_KEY: ${HONEYCOMB_API_KEY}
     depends_on:
-      kafka:
+      rabbitmq:
         condition: service_healthy
       mongodb:
         condition: service_healthy
