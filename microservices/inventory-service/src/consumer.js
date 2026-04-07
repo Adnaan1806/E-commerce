@@ -1,10 +1,13 @@
 const amqp = require('amqplib')
+const api = require('@opentelemetry/api')
 const { v4: uuidv4 } = require('uuid')
 const { Stock, Reservation } = require('./models')
 const { publishEvent } = require('./producer')
 
-const EXCHANGE = 'ecommerce-events'
-const QUEUE    = 'inventory-service-queue'
+const EXCHANGE     = 'ecommerce-events'
+const DLQ_EXCHANGE = 'ecommerce-events.dlq'
+const QUEUE        = 'inventory-service-queue'
+const DLQ_QUEUE    = 'inventory-service-queue.dlq'
 
 const processedEvents = new Set()
 
@@ -59,8 +62,19 @@ async function startConsumer() {
   const connection = await amqp.connect(process.env.RABBITMQ_URL)
   const channel    = await connection.createChannel()
 
+  // Main exchange
   await channel.assertExchange(EXCHANGE, 'topic', { durable: true })
-  await channel.assertQueue(QUEUE, { durable: true })
+
+  // Dead Letter Queue setup
+  await channel.assertExchange(DLQ_EXCHANGE, 'topic', { durable: true })
+  await channel.assertQueue(DLQ_QUEUE, { durable: true })
+  await channel.bindQueue(DLQ_QUEUE, DLQ_EXCHANGE, '#')
+
+  // Main queue with DLQ routing on nack
+  await channel.assertQueue(QUEUE, {
+    durable: true,
+    arguments: { 'x-dead-letter-exchange': DLQ_EXCHANGE },
+  })
 
   await channel.bindQueue(QUEUE, EXCHANGE, 'OrderCreated')
   await channel.bindQueue(QUEUE, EXCHANGE, 'OrderCancelled')
@@ -80,18 +94,34 @@ async function startConsumer() {
     processedEvents.add(eventId)
     console.log(`[Consumer] Received ${eventType}`)
 
-    try {
-      switch (eventType) {
-        case 'OrderCreated':   await handleOrderCreated(payload, correlationId); break
-        case 'OrderCancelled': await releaseStock(payload.orderId, correlationId, 'OrderCancelled'); break
-        case 'PaymentFailed':  await releaseStock(payload.orderId, correlationId, 'PaymentFailed');  break
-        default: console.log(`[Consumer] Unhandled: ${eventType}`)
-      }
-      channel.ack(msg)
-    } catch (err) {
-      console.error(`[Consumer] Error:`, err.message)
-      channel.nack(msg, false, false)
-    }
+    // Extract trace context from message headers to continue the distributed trace
+    const parentContext = api.propagation.extract(api.ROOT_CONTEXT, msg.properties.headers || {})
+    const tracer = api.trace.getTracer(process.env.SERVICE_NAME || 'inventory-service')
+
+    await api.context.with(parentContext, async () => {
+      const span = tracer.startSpan(`process ${eventType}`, { kind: api.SpanKind.CONSUMER })
+      await api.context.with(api.trace.setSpan(api.context.active(), span), async () => {
+        span.setAttribute('messaging.event_type', eventType)
+        span.setAttribute('messaging.correlation_id', correlationId)
+        try {
+          switch (eventType) {
+            case 'OrderCreated':   await handleOrderCreated(payload, correlationId); break
+            case 'OrderCancelled': await releaseStock(payload.orderId, correlationId, 'OrderCancelled'); break
+            case 'PaymentFailed':  await releaseStock(payload.orderId, correlationId, 'PaymentFailed');  break
+            default: console.log(`[Consumer] Unhandled: ${eventType}`)
+          }
+          channel.ack(msg)
+          span.setStatus({ code: api.SpanStatusCode.OK })
+        } catch (err) {
+          console.error(`[Consumer] Error:`, err.message)
+          span.recordException(err)
+          span.setStatus({ code: api.SpanStatusCode.ERROR, message: err.message })
+          channel.nack(msg, false, false)
+        } finally {
+          span.end()
+        }
+      })
+    })
   })
 
   console.log(`[Consumer] inventory-service listening on queue: ${QUEUE}`)

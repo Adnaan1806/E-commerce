@@ -1,5 +1,6 @@
 const amqp = require('amqplib')
 const { v4: uuidv4 } = require('uuid')
+const api = require('@opentelemetry/api')
 
 const EXCHANGE = 'ecommerce-events'
 let channel = null
@@ -14,6 +15,10 @@ async function connectProducer() {
 async function publishEvent(exchange, eventType, payload, correlationId) {
   if (!channel) await connectProducer()
 
+  // Inject active trace context into message headers for distributed tracing
+  const headers = {}
+  api.propagation.inject(api.context.active(), headers)
+
   const event = {
     eventId:       uuidv4(),
     eventType,
@@ -27,7 +32,7 @@ async function publishEvent(exchange, eventType, payload, correlationId) {
     EXCHANGE,
     eventType,
     Buffer.from(JSON.stringify(event)),
-    { persistent: true }
+    { persistent: true, headers }
   )
 
   console.log(`[Producer] Published ${eventType}`)
