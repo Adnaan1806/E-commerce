@@ -36,6 +36,60 @@ app.get('/inventory/:productId', async (req, res) => {
   }
 })
 
+// ─── POST /inventory/reserve ──────────────────────────────────
+app.post('/inventory/reserve', async (req, res) => {
+  try {
+    const { productId, quantity, orderId } = req.body
+    if (!productId || !quantity || !orderId)
+      return res.status(400).json({ error: 'productId, quantity and orderId are required' })
+
+    const stock = await Stock.findOne({ productId })
+    if (!stock) return res.status(404).json({ error: 'Product not found' })
+
+    const available = stock.quantity - stock.reserved
+    if (available < quantity)
+      return res.status(409).json({ error: 'Insufficient stock', available })
+
+    stock.reserved += quantity
+    await stock.save()
+
+    res.json({ productId, reserved: quantity, available: stock.quantity - stock.reserved })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to reserve stock' })
+  }
+})
+
+// ─── POST /inventory/release ──────────────────────────────────
+app.post('/inventory/release', async (req, res) => {
+  try {
+    const { productId, quantity } = req.body
+    if (!productId || !quantity)
+      return res.status(400).json({ error: 'productId and quantity are required' })
+
+    const stock = await Stock.findOne({ productId })
+    if (!stock) return res.status(404).json({ error: 'Product not found' })
+
+    stock.reserved = Math.max(0, stock.reserved - quantity)
+    await stock.save()
+
+    res.json({ productId, released: quantity, available: stock.quantity - stock.reserved })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to release stock' })
+  }
+})
+
+// ─── POST /inventory/seed ─────────────────────────────────────
+app.post('/inventory/seed', async (_req, res) => {
+  await Stock.deleteMany({})
+  await Stock.insertMany([
+    { productId: 'PROD-001', productName: 'Laptop',      quantity: 50 },
+    { productId: 'PROD-002', productName: 'Headphones',  quantity: 100 },
+    { productId: 'PROD-003', productName: 'Mouse',       quantity: 200 },
+    { productId: 'PROD-004', productName: 'Keyboard',    quantity: 150 },
+  ])
+  res.json({ message: 'Stock seeded' })
+})
+
 // ─── Seed initial stock ───────────────────────────────────────
 async function seedStock() {
   const count = await Stock.countDocuments()
